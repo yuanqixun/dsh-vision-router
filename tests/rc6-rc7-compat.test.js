@@ -2,6 +2,8 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { Config as EntryConfig, SETTINGS_CONTRACT_REVISION } from '../entry.js'
+import { installLocalVisionStabilizer } from '../lib/local-vision-stabilizer.js'
+import { installOllamaColdStartGuard } from '../lib/ollama-cold-start.js'
 import { eventHasImage } from '../index.js'
 import { classifyWebModulesRows } from '../scripts/dsh-web-modules-overlay-contract.mjs'
 import { classifyWebConnectionRows } from '../scripts/dsh-web-connection-overlay-contract.mjs'
@@ -385,6 +387,32 @@ test('host settings bridge registers the final entry settings contract including
   assert.equal(registeredConfig({ backgroundBenchmarking: 'local-free' }).backgroundBenchmarking, 'local-free')
   assert.equal(registeredConfig({ backgroundBenchmarking: 'all' }).backgroundBenchmarking, 'all')
   assert.equal(registeredConfig({ backgroundBenchmarking: 'off' }).backgroundBenchmarking, 'off')
+})
+
+test('host settings bridge uses entry config when the Host derives forms from plugin entries', () => {
+  const entry = { foo: 'base', stealth: true }
+  let observed
+  const settings = { configure() {} }
+  const ctx = {
+    inject(dependencies, callback) {
+      if (dependencies.includes('settings')) callback({ settings })
+    },
+    effect(factory) { factory() },
+    logger: { warn() {}, info() {}, error() {} },
+  }
+  const guarded = installOllamaColdStartGuard(ctx, entry, {})
+  const stabilized = installLocalVisionStabilizer(guarded, entry, {}).ctx
+  const wrapped = installHostSettingsCompatibility(stabilized, entry, {
+    Config: EntryConfig,
+    namespace: 'vision-router',
+  })
+  wrapped.inject(['settings'], child => {
+    const scope = child.settings.register('vision-router')
+    assert.deepEqual(scope.get(), { foo: 'base', stealth: false })
+    scope.watch(value => { observed = value })
+  })
+  assert.equal(observed, undefined)
+  assert.equal(typeof settings.register, 'undefined')
 })
 
 test('attachment compatibility follows the batch-attachment seam', () => {

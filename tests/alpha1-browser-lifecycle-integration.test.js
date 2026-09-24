@@ -168,7 +168,7 @@ function alphaHarness() {
   return { loader, live, context }
 }
 
-function slotContext({ React, events, catalogCalls }) {
+function slotContext({ React, events, catalogCalls, modernSettings = false }) {
   const ledger = []
   const snapshot = {
     status: 'ready',
@@ -211,7 +211,12 @@ function slotContext({ React, events, catalogCalls }) {
   }
   const connection = { isLoopback: true, rpc: { call() {} } }
   const ctx = {
-    settingsScope: { bind() { return settingsScope } },
+    ...modernSettings
+      ? { configForms: { get(namespace) {
+        assert.equal(namespace, 'vision-router')
+        return settingsScope
+      } } }
+      : { settingsScope: { bind() { return settingsScope } } },
     slots: {
       register(options, component) {
         const entry = { options, component }
@@ -332,6 +337,23 @@ test('alpha.1 real DVR browser lifecycle keeps one Settings IA surface and all c
 
   assert.equal(requested.includes('@deepseek-ai/dsh-client-ui-attachment'), false)
   assert.ok(ledger.some((entry) => entry.options?.name === 'tool.call.toolview' && entry.options?.key === 'vision_present'))
+})
+
+test('browser client mounts with configForms and no settingsScope', async () => {
+  const harness = alphaHarness()
+  vm.runInNewContext(readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8'), harness.context)
+  const plugin = harness.live.get('dsh-vision-router').factory((id) => {
+    if (id === 'react') return fakeReact()
+    if (id === '@deepseek-ai/dsh-client-ui-primitives') return {}
+    throw new Error(`unexpected browser module request: ${id}`)
+  })
+  const { ctx, ledger } = slotContext({
+    React: fakeReact(), events: [], catalogCalls: [], modernSettings: true,
+  })
+  assert.equal(ctx.settingsScope, undefined)
+  await plugin.apply(ctx)
+  assert.equal(ledger.filter(entry => entry.options?.name === 'settings.section' &&
+    entry.options?.id === 'vision-router').length, 1)
 })
 
 test('alpha.1 live transition keeps stock model selector visibility projection', () => {
