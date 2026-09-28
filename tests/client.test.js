@@ -74,9 +74,9 @@ test('DeepSeek ownership notice distinguishes modern Host ownership from legacy 
   assert.match(source, /state\.active !== true \|\| state\.reason !== 'official-unavailable'/)
 })
 
-test('the client bundle does not hard-inject optional connection or versioned settings services', () => {
+test('the client bundle does not hard-inject the optional connection service', () => {
   const bundle = loadClientBundle()
-  assert.deepEqual(bundle.inject, ['slots', 'locale', 'sessions', 'remote'])
+  assert.deepEqual(bundle.inject, ['settingsScope', 'slots', 'locale', 'sessions', 'remote'])
   assert.equal(typeof bundle.apply, 'function')
   const source = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
   assert.equal(source.includes("return ctx.get('connection')"), true)
