@@ -38,10 +38,13 @@
 
 <p align="center">💬 <strong>QQ community group: 1105463028</strong></p>
 
+> [!CAUTION]
+> **Data leaves your machine by default.** When a cloud vision model is used, Vision Router sends the image (or a derived crop), the vision prompt and related request metadata to that provider. A fresh install has an anonymous OVHcloud vision fallback enabled, so "free" and "no key" do **not** mean offline. Do not use the cloud chain for confidential, regulated or classified material. See [Data flow and strict local-only use](#data-flow-and-strict-local-only-use).
+
 > [!WARNING]
-> 📌 **Announcement (v2.2.1)**
+> 📌 **Announcement (v2.2.5)**
 >
-> **v2.2.1:** Stability hotfix for large-session repair, accessor-based fetch composition, non-divisible pixel-diff bounds, and local Ollama answer-budget preservation — without raising the rc.8 Host floor. [What’s new →](docs/releases/v2.2.1.md)
+> **v2.2.5:** Adds fail-closed **Local-only vision** and fixes the remaining DSH `0.1.7-rc.2` Windows Desktop multi-plugin `Loading plugins…` hang by isolating Vision Router’s WebServer registrar from other plugins. The public Host floor remains `0.1.0-rc.8`. [What’s new →](docs/releases/v2.2.5.md)
 
 <p align="center">
   <img src="assets/vision-demo.gif" width="640" alt="Demo: paste an image, the agent locates the send button with vision_ground / vision_crop / vision_pixel_diff and answers with coordinates" />
@@ -49,6 +52,7 @@
 
 ## Contents
 
+- [Data flow and strict local-only use](#data-flow-and-strict-local-only-use)
 - [Why this exists](#why-this-exists)
 - [How it compares](#how-it-compares)
 - [Design lineage](#design-lineage)
@@ -61,6 +65,21 @@
 - [Configuration](#configuration)
 - [Install and lifecycle](#install-and-lifecycle)
 - [Troubleshooting](#troubleshooting)
+
+## Data flow and strict local-only use
+
+Vision Router does not operate fully offline in its default configuration. The exact boundary depends on the operation and the selected models:
+
+| Operation | Where data goes |
+|---|---|
+| Local pixel tools such as crop, pixel diff, palette, SVG trace, cutout, materialize and HTML screenshot | Processed on the DSH machine; these operations do not call a vision model. |
+| `vision_ocr` with Tesseract | Processed on the DSH machine. With the default `auto` engine, an unavailable or empty local OCR result may fall back to a vision model. |
+| Image-turn routing and vision-model tools such as describe, detect, ground or vision OCR | The image or derived crop, prompt and relevant context are sent to the selected vision provider. |
+| Built-in free fallback | Sent anonymously (no API key) to OVHcloud AI Endpoints at `oai.endpoints.kepler.ai.cloud.ovh.net`; the service still receives the request payload and network metadata such as the source IP. |
+| User-configured cloud model / HTTP provider | Sent to that provider's configured endpoint under its own retention and privacy terms. |
+| Local Ollama / LM Studio | Image pixels are sent to the configured local endpoint. The resulting text still returns to the current chat model, which may itself be remote. |
+
+To stop **Vision Router itself** from sending image data to remote vision endpoints, enable **Settings → Vision Router → General → Local-only vision**. This is a runtime policy, not a destructive rewrite: saved cloud rows and `freeFallback` stay configured but cannot execute while the switch is on. Only loopback visual endpoints (`localhost`, `127.0.0.0/8`, `::1`) are eligible, including Ollama, LM Studio, and custom local HTTP backends. For a **strict local-only workflow**, also use a local chat model because vision result text still returns to the current chat model. Test the final network boundary in your own environment; Vision Router cannot make a remote chat model, proxy or Host integration local.
 
 ## Why this exists
 
@@ -253,7 +272,7 @@ The diagram covers the eleven image-processing tools. `vision_present` (durable 
 | `vision_present` | Publish a generated or edited local image as a durable chat attachment so the user can see it | image attachment |
 | `vision_pixel_diff` | Per-pixel comparison: diff ratio + worst 8×8-grid regions | red heatmap PNG + JSON report |
 | `vision_colors` | Dominant colors (hex + share) | — |
-| `vision_ocr` | Text transcription: local tesseract (chi_sim+eng) first, vision model fallback | — |
+| `vision_ocr` | Text transcription: configurable default engine (`auto` / local Tesseract / vision model); an explicit per-call engine still wins | — |
 | `vision_trace` | SVG vectorization (potrace posterization; icons/logos) | SVG |
 | `vision_extract_foreground` | Cutout via border flood fill (uniform backgrounds) | transparent PNG |
 | `vision_html_screenshot` | Screenshot a local HTML file (headless system Chrome); `fullPage: true` captures the whole page and reports `pageHeight` | PNG |
@@ -356,9 +375,10 @@ Everything is optional; defaults work out of the box. Prefer **Settings → Visi
 | `tool` / `progressiveTools` / `autoActivateOnImage` | `true` / `false` / `true` | vision tools on / progressive mounting (off by default for a stable tool schema) / image-turn auto-mount when progressive mode is enabled; `progressiveTools` is boot-time config |
 | `rewriteImages` | `true` | rewrite image blocks in the model input (cached description or tool-hint marker); the UI log keeps images |
 | `desktopScreenshot` | `false` | privacy opt-in for the model-callable `vision_screenshot` desktop-capture tool; checked live before every capture |
-| `freeFallback` | `true` | append the anonymous OVH models after explicit local/custom HTTP backends; turning this off never disables an explicitly configured local backend |
-| `localOllama` | `{ enabled: false, baseURL: 'http://127.0.0.1:11434/v1', model: 'qwen2.5vl', format: 'openai' }` | local vision backend; when enabled, `local-ollama` leads the HTTP vision chain, is skipped automatically when down, and supports OpenAI or Anthropic wire format |
-| `localLmStudio` | `{ enabled: false, baseURL: 'http://localhost:1234/v1', model: '', format: 'openai' }` | local LM Studio backend after Ollama; enter the exact model identifier from LM Studio Developer or `/v1/models` |
+| `localOnlyVision` | `false` | runtime privacy policy: when enabled, only loopback vision endpoints may execute; cloud/DSH providers and the built-in OVH fallback stay saved but are fail-closed |
+| `freeFallback` | `true` | append the anonymous OVH models after explicit local/custom HTTP backends; ignored while `localOnlyVision` is enabled |
+| `localOllama` | `{ enabled: false, baseURL: 'http://127.0.0.1:11434/v1', model: 'qwen2.5vl', format: 'openai', maxTokens: 4096, reasoningEffort: 'none' }` | local vision backend; OpenAI mode disables supported model reasoning by default so the output budget is spent on answer text |
+| `localLmStudio` | `{ enabled: false, baseURL: 'http://localhost:1234/v1', model: '', format: 'openai', maxTokens: 4096, reasoningEffort: 'none' }` | local LM Studio backend after Ollama; LM Studio 0.4+ can use `format: 'lmstudio'` for documented native reasoning control |
 | `visionTurnBudgetMs` | `0` | whole-turn vision wall-clock budget; `0` means unlimited. Concrete provider calls/tools still keep their own hard deadlines |
 | `downscale` / `downscaleMaxPixels` | `true` / `4000000` | pre-call downscale and its pixel budget (latency guard) |
 | `cache` / `cacheTtlSeconds` / `cacheMaxEntries` | `true` / `3600` / `200` | vision answer cache |
@@ -406,22 +426,22 @@ ollama pull qwen2.5vl
 
 **3. What happens**
 
-- When enabled, `local-ollama` heads the HTTP vision chain. For a strict local-only setup, remove cloud vision rows/custom HTTP endpoints and turn off `freeFallback`.
+- When enabled, `local-ollama` heads the HTTP vision chain. To hard-block remote visual egress without deleting saved cloud settings, enable **General → Local-only vision**; only loopback visual endpoints remain executable while the policy is on.
 - The selected loopback Ollama model is prewarmed through Ollama's native API and kept resident for 30 minutes. If it is cold when Ollama is the primary image backend, loading completes before the normal vision-task budget starts; a short `/api/ps` probe keeps a dead service on the fast fallback path. Remote Ollama URLs are never auto-warmed.
 - **LM Studio works the same way** — enable `localLmStudio` with its OpenAI-compatible endpoint (default `http://localhost:1234/v1`) and enter the exact model identifier shown in Developer or `/v1/models`. It sits after `local-ollama` and before custom/cloud HTTP backends.
-- Each local backend can speak **OpenAI or Anthropic format** via `format` (default `openai`). Anthropic mode routes to `/v1/messages` with `anthropic-version` and base64 image sources; `x-api-key` is sent only when a key is configured. LM Studio needs version 0.4.1 or newer for this endpoint.
-- If a local backend is down or the call times out, its entry is skipped automatically and the chain falls through to the cloud backends — no call breaks.
+- Local backends keep **OpenAI** as the compatibility default and can also use **Anthropic**. LM Studio additionally offers **LM Studio native** mode (`format: 'lmstudio'`, LM Studio 0.4+) at `/api/v1/chat`; use it when you need documented reasoning control (`reasoningEffort: 'none'` maps to `reasoning: off`). `maxTokens` is configurable and defaults to 4096.
+- If a local backend is down or the call times out, its entry is skipped automatically. Normally the chain can continue to cloud backends; with **Local-only vision** enabled, remote fallbacks remain blocked and the visual call fails closed instead.
 - `vision_screenshot` is disabled by default. After the separate Desktop screenshot opt-in, `identify=true` uses the same Ollama → LM Studio fallback.
 
 ## Requirements
 
 - DeepSeek Harness Web profile. Normal installs can use `npx @deepseek-ai/dsh ...`; source checkouts use `pnpm dsh ...`. A bare `dsh ...` command only works when the CLI is already on your shell `PATH`.
-- **DSH Host support policy:** DVR 2.1.x keeps DSH `0.1.0-rc.8` as the public minimum and currently supports the released stable channel through `0.1.5-rc.2`. Exact `0.1.6-alpha.1` coverage is **verification evidence only**, not a preview support promise; scheduled `latest`/`alpha` canaries monitor drift without changing the support policy. DVR 2.0.x was the final train with public support for rc.6/rc.7. See [DSH Host support window](docs/architecture/dsh-support-window.md).
+- **DSH Host support policy:** DVR 2.2.x keeps DSH `0.1.0-rc.8` as the public minimum and currently supports the released stable channel through `0.1.5-rc.3`. The DSH `0.2.x` train is forward-admitted (`^0.2.0`) after exact pre-release master, real Host, Windows Desktop, multi-plugin isolation, and packaged-ASAR validation; the final immutable `0.2.0` tag and signed Desktop artifact will be revalidated when upstream publishes them. Exact `0.1.7-rc.2` (`next`) coverage remains verification evidence. DVR 2.0.x was the final train with public support for rc.6/rc.7. See [DSH Host support window](docs/architecture/dsh-support-window.md).
 - Node ≥ 22 (host side).
 - No API key for the default free chain; a credential reference (`apiKeyEnv`) only for paid `httpProviders`.
 - Chrome / Chromium / Edge is needed only for `vision_html_screenshot`; every other tool works without a browser.
 - Desktop capture is opt-in. Windows and macOS use OS-provided capture facilities; Linux needs ImageMagick `import` or `scrot` and a capturable desktop session (Wayland support depends on the environment).
-- Tesseract is optional: `vision_ocr` falls back to the vision model when the local engine is absent.
+- Tesseract is optional. `vision_ocr` defaults to `ocrEngine: auto` (local Tesseract first, vision fallback), and Settings → Advanced → **Default OCR engine** can force Tesseract-only or vision-model-only behavior without uninstalling Tesseract. An explicit per-call `engine=tesseract|vision` always overrides the default.
 
 ## Install and lifecycle
 

@@ -249,6 +249,8 @@ export const Config = z.object({
   // (its own cap) and the vision-model fallback only the rest — never two
   // full timeouts added together.
   ocrTimeoutMs: z.number().step(1).min(1000).max(120000).default(30000),
+  // Default engine for vision_ocr. Per-call engine=tesseract|vision remains authoritative.
+  ocrEngine: z.union(['auto', 'tesseract', 'vision']).default('auto'),
   proxy: z.string().default(''),
   proxyHosts: z.array(z.string()).default([...DEFAULT_PROXY_HOSTS]),
   // Remote browsers are intentionally unable to use DSH's broad settings.*
@@ -256,6 +258,12 @@ export const Config = z.object({
   // trusted-host transport fence. Only a loopback/local settings page may
   // change this permission; the remote bridge rejects writes to the field.
   allowRemoteSettings: z.boolean().default(false),
+  // Privacy policy switch: when enabled, Vision Router executes image-model
+  // requests only against loopback visual endpoints (Ollama, LM Studio, or
+  // custom local HTTP). Saved cloud
+  // rows remain intact but inactive, so disabling the policy restores the
+  // previous routing chain without destructive settings rewrites.
+  localOnlyVision: z.boolean().default(false),
   freeFallback: z.boolean().default(true),
   // 云端免费优先：开启后，云端后端先尝试内置 OVH 免费模型（免注册、免
   // API Key），付费 httpProviders 仅在免费模型全部失败后作为兜底，尽量把
@@ -312,6 +320,8 @@ export const Config = z.object({
       // 设置卡用 placeholder 提示识别任务常用的建议值。
       temperature: z.number().min(0).max(2),
       top_p: z.number().min(0).max(1),
+      maxTokens: z.number().step(1).min(256).max(32768).default(4096),
+      reasoningEffort: z.union(['provider_default', 'none', 'low', 'medium', 'high', 'max']).default('none'),
     })
     .default({}),
   // ── dsh-vision 并入：本地 LM Studio 视觉后端（与 Ollama 同层级）───────────
@@ -326,10 +336,14 @@ export const Config = z.object({
       model: z.string().default(''),
       // 请求格式：'openai'（/chat/completions，默认）| 'anthropic'
       // （/messages，LM Studio 的 OpenAI 兼容服务同样提供）。
-      format: z.union(['openai', 'anthropic']).default('openai'),
+      // LM Studio 0.4+ 的 native /api/v1/chat 明确支持 reasoning=off；
+      // OpenAI Chat Completions 仍保留给旧版/兼容服务。
+      format: z.union(['openai', 'anthropic', 'lmstudio']).default('openai'),
       // 与 localOllama 相同：显式设置才透传，留空尊重服务端默认。
       temperature: z.number().min(0).max(2),
       top_p: z.number().min(0).max(1),
+      maxTokens: z.number().step(1).min(256).max(32768).default(4096),
+      reasoningEffort: z.union(['provider_default', 'none', 'low', 'medium', 'high', 'max']).default('none'),
     })
     .default({}),
   // Legacy compatibility only: older profiles may still contain these two
@@ -413,6 +427,8 @@ import {
   DEFAULT_HTTP_PROVIDERS,
   httpProviderFallbackWeight,
   weightedFallbackBudget,
+  localOnlyVisionEnabled,
+  isLoopbackVisionBaseURL,
   localOllamaProvidersOf,
   localLmStudioProvidersOf,
   localProvidersOf,
@@ -510,6 +526,8 @@ export {
   DEFAULT_HTTP_PROVIDERS,
   httpProviderFallbackWeight,
   weightedFallbackBudget,
+  localOnlyVisionEnabled,
+  isLoopbackVisionBaseURL,
   localOllamaProvidersOf,
   localLmStudioProvidersOf,
   localProvidersOf,
@@ -1995,6 +2013,13 @@ export function apply(ctx, config = {}, runtime = {}) {
       add(HTTP_ROUTE, `${provider.name}/${provider.model}`)
     }
 
+    // Local-only vision is an execution policy, not a destructive settings
+    // rewrite. Saved native/cloud rows stay visible for later restoration, but
+    // they cannot participate in tool auto-discovery while the policy is on.
+    if (localOnlyVisionEnabled(current())) {
+      return applyVisionExecutionOrder(out, currentVisionExecutionOrder())
+    }
+
     const capabilities = await collectVisionBackendCapabilities()
     for (const [provider, models] of Object.entries(capabilities)) {
       if (provider === HTTP_ROUTE || ownRoutes().has(provider)) continue
@@ -2545,7 +2570,7 @@ export function apply(ctx, config = {}, runtime = {}) {
       const ocrPolicy =
         '不要默认把 OCR 当第二步；仅在需要逐字保真时用 vision_ocr，并把结果当作需要结合上下文验证的证据。' +
         'UI/截图语义通常用 vision_describe 或 vision_detect，精确定位用 vision_ground。' +
-        'vision_ocr 的 engine=auto 始终先尝试本地 Tesseract，失败或空结果时再回退视觉模型；结构化模式不会改变这一顺序。' +
+        'vision_ocr 未显式指定 engine 时遵循设置中的 OCR 默认引擎；单次显式 engine=tesseract/vision 始终优先。' +
         '完成至少 1 次后续证据调用后，证据充分就直接作答，不要为了流程继续调用。'
       bootstrapReminder = {
         role: 'user',
@@ -2967,6 +2992,10 @@ export function apply(ctx, config = {}, runtime = {}) {
           )
 
         for (const pair of usablePairs) {
+          if (localOnlyVisionEnabled(current()) && !isLocalBackendPair(pair)) {
+            errors.push(`${pair.provider}/${pair.model}: skipped (local-only vision policy)`)
+            continue
+          }
           const candidateWeight = primaryWeight
           const weightAtStart = Math.max(candidateWeight, remainingWeight)
           remainingWeight = Math.max(0, remainingWeight - candidateWeight)
@@ -3062,9 +3091,9 @@ ctx.logger?.info(
 
                 }
               }
-              const fallback = `vision_describe: the model did not produce valid JSON. Raw output:\n${text.slice(0, 2000)}`
-              if (cacheEnabled()) cache.set(key, fallback)
-              return fallback
+              const invalidJson = new Error('vision_describe backend did not produce valid JSON after one correction retry')
+              invalidJson.code = 'INVALID_REQUEST'
+              throw invalidJson
             }
             if (text !== '') {
               if (cacheEnabled()) cache.set(key, text)
@@ -3098,6 +3127,10 @@ ctx.logger?.info(
         // final fallbacks: they bypass the harness llm service entirely, so the
         // anonymous free endpoint works without any credential.
         for (const provider of httpFallbacks) {
+          if (localOnlyVisionEnabled(current()) && !isLoopbackVisionBaseURL(provider?.baseURL)) {
+            errors.push(`http:${provider?.name}/${provider?.model}: skipped (local-only vision policy)`)
+            continue
+          }
           const candidateWeight = httpProviderFallbackWeight(provider)
           const weightAtStart = Math.max(candidateWeight, remainingWeight)
           remainingWeight = Math.max(0, remainingWeight - candidateWeight)
@@ -3188,9 +3221,9 @@ ctx.logger?.info(
 
                 }
               }
-              const fallback = `vision_describe: the model did not produce valid JSON. Raw output:\n${text.slice(0, 2000)}`
-              if (cacheEnabled()) cache.set(key, fallback)
-              return fallback
+              const invalidJson = new Error('vision_describe backend did not produce valid JSON after one correction retry')
+              invalidJson.code = 'INVALID_REQUEST'
+              throw invalidJson
             }
             if (text !== '') {
               if (cacheEnabled()) cache.set(key, text)
@@ -3603,6 +3636,10 @@ ctx.logger?.info(
         errors.push(`${backendKey}: ${message}`)
       }
       for (const pair of usablePairs) {
+        if (localOnlyVisionEnabled(current()) && !isLocalBackendPair(pair)) {
+          errors.push(`${pair.provider}/${pair.model}: skipped (local-only vision policy)`)
+          continue
+        }
         const candidateWeight = primaryWeight
         const weightAtStart = Math.max(candidateWeight, remainingWeight)
         remainingWeight = Math.max(0, remainingWeight - candidateWeight)
@@ -3663,6 +3700,10 @@ ctx.logger?.info(
       }
       const httpContent = toOpenAIContent([block], () => imageBytes)
       for (const provider of httpFallbacks) {
+        if (localOnlyVisionEnabled(current()) && !isLoopbackVisionBaseURL(provider?.baseURL)) {
+          errors.push(`http:${provider?.name}/${provider?.model}: skipped (local-only vision policy)`)
+          continue
+        }
         const candidateWeight = httpProviderFallbackWeight(provider)
         const weightAtStart = Math.max(candidateWeight, remainingWeight)
         remainingWeight = Math.max(0, remainingWeight - candidateWeight)
@@ -4195,10 +4236,11 @@ ctx.logger?.info(
     deepToolDefs.push({
       name: 'vision_ocr',
       description:
-        'Transcribe TEXT from an image. ENGINE POLICY: omitted engine / engine=auto always tries local ' +
-        'Tesseract (chi_sim+eng) first — fast, free, offline — then falls back to a vision model if local ' +
-        'OCR fails or returns no text. Structured 1+x follow-up does not change this order. Explicit ' +
-        'engine=tesseract or engine=vision is always honored. Returns the text and which engine produced it. ' +
+        'Transcribe TEXT from an image. ENGINE POLICY: explicit engine=tesseract or engine=vision always wins. ' +
+        'Otherwise the configured OCR engine policy applies. The default auto policy tries local Tesseract ' +
+        '(chi_sim+eng) first — fast, free, offline — then falls back to a vision model if local OCR fails or ' +
+        'returns no text. Structured 1+x follow-up does not change the selected policy. Returns the text and ' +
+        'which engine produced it. ' +
         'SCOPE: vision_ocr reads letters, it does NOT recognize people, objects or scenes. Never use it ' +
         'as a fallback when vision_describe fails to identify who/what is in a picture ("这是谁" / ' +
         '"这是什么东西" questions are answered by vision_describe, not OCR). If vision_describe returns ' +
@@ -4227,7 +4269,7 @@ ctx.logger?.info(
           },
           engine: {
             type: 'string',
-            description: '"auto" (default): always try local Tesseract first, then fall back to the vision model if local OCR fails or returns no text. Structured 1+x does not change this order; use explicit "tesseract"/"vision" to force an engine.',
+            description: '"auto": use the configured OCR engine policy (default policy is local Tesseract first, then vision fallback); explicit "tesseract"/"vision" always overrides the configured default for this call.',
           },
         },
         additionalProperties: false,
@@ -4236,7 +4278,7 @@ ctx.logger?.info(
       async execute(args, exec) {
         const imageInput = resolveOcrImageInput(args)
         const session = exec?.agent?.session
-        const engine = resolveVisionOcrEngine(args.engine)
+        const engine = resolveVisionOcrEngine(args.engine, current().ocrEngine)
         const degraded = degradedLocalState(session, imageInput)
         if (
           engine !== 'vision' &&
@@ -4465,8 +4507,11 @@ ctx.logger?.info(
                     used = 'failed'
                     text = ''
                   } else {
-                    const retryText = retry.text.trim()
-                    if (retryText !== '') text = retryText
+                    // An ok retry that came back blank means the stricter prompt
+                    // found no visible text. The first answer was already judged
+                    // a hallucination (12k+ chars) — keeping it here would
+                    // publish it as engine-verified. Same contract as EMPTY below.
+                    text = retry.text.trim()
                     used = 'vision'
                   }
                 } else {

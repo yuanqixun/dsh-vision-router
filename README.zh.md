@@ -38,10 +38,13 @@
 
 <p align="center">💬 <strong>QQ 用户交流群：1105463028</strong></p>
 
+> [!CAUTION]
+> **默认配置会让数据出网。** 使用云端视觉模型时，Vision Router 会将图片（或由它裁剪出的局部）、识图提示词及相关请求元数据发送给对应供应商。新安装默认开启 OVHcloud 匿名视觉兜底，因此“免费”和“免 Key”不等于离线。涉密、涉案、内部或其他受限材料请勿使用云端链路。详见[数据流向与严格纯本地配置](#数据流向与严格纯本地配置)。
+
 > [!WARNING]
-> 📌 **公告（v2.2.1）**
+> 📌 **公告（v2.2.5）**
 >
-> **v2.2.1：稳定性热修——修复大型 Session repair 卡死、accessor fetch 组合、非整除 pixel diff 边界与本地 Ollama 推理占满答案预算；公开最低 Host 仍保持 `0.1.0-rc.8`。** [查看完整更新 →](docs/releases/v2.2.1.md)
+> **v2.2.5：新增 fail-closed 的「仅本地视觉」，并根修 DSH `0.1.7-rc.2` Windows Desktop 多插件环境下残留的 `Loading plugins…` 卡死——Vision Router 的 WebServer registrar 不再污染其他插件。公开最低 Host 仍保持 `0.1.0-rc.8`。** [查看完整更新 →](docs/releases/v2.2.5.md)
 
 <p align="center">
   <img src="assets/vision-demo.gif" width="640" alt="演示：粘贴图片，Agent 用 vision_ground / vision_crop / vision_pixel_diff 定位发送按钮并给出坐标" />
@@ -49,6 +52,7 @@
 
 ## 目录
 
+- [数据流向与严格纯本地配置](#数据流向与严格纯本地配置)
 - [为什么做这个](#为什么做这个)
 - [对比同类插件](#对比同类插件)
 - [设计来源](#设计来源)
@@ -61,6 +65,21 @@
 - [配置项](#配置项)
 - [安装与生命周期](#安装与生命周期)
 - [故障排查](#故障排查)
+
+## 数据流向与严格纯本地配置
+
+Vision Router 在默认配置下不是完全离线工具。具体边界取决于操作和当前选择的模型：
+
+| 操作 | 数据去向 |
+|---|---|
+| 裁剪、像素对比、取色、SVG 矢量化、抠图、文件实体化、HTML 截图等本地像素工具 | 在 DSH 所在机器处理，这些操作不调用视觉模型。 |
+| 使用 Tesseract 的 `vision_ocr` | 在 DSH 所在机器处理。默认 `auto` 引擎在本地 OCR 不可用或结果为空时，可能回退到视觉模型。 |
+| 图片轮路由及 describe、detect、ground、视觉 OCR 等模型工具 | 图片或局部裁剪、提示词和相关上下文会发送给当前视觉供应商。 |
+| 内置免费兜底 | 以匿名方式（无 API Key）发往 OVHcloud AI Endpoints `oai.endpoints.kepler.ai.cloud.ovh.net`；服务仍会收到请求内容和源 IP 等网络元数据。 |
+| 用户配置的云模型 / HTTP 供应商 | 发送到对应配置端点，并受该供应商的保留与隐私条款约束。 |
+| 本地 Ollama / LM Studio | 图像像素发送到配置的本地端点；识图结果文本仍会回到当前聊天模型，而聊天模型自身可能仍在云端。 |
+
+若要阻止 **Vision Router 本身**把图片发送给远程视觉端点，请开启 **设置 → Vision Router → 常规 → 仅本地视觉**。这是运行时策略，不会破坏性修改配置：已保存的云端识图行和 `freeFallback` 会保留，但开关开启期间无法执行；只有回环地址（`localhost`、`127.0.0.0/8`、`::1`）上的视觉端点可以运行，包括 Ollama、LM Studio 和自定义本机 HTTP 后端。若要求**整个工作流严格纯本地**，还必须同时使用本地聊天模型，因为识图结果文本仍会交给当前聊天模型。请在自己的环境中验证最终网络边界；Vision Router 无法把远程聊天模型、代理或 Host 集成变成本地服务。
 
 ## 为什么做这个
 
@@ -251,7 +270,7 @@ Agent 仅根据参考图复刻 UI，再用 `vision_pixel_diff` 验证最终结�
 | `vision_present` | 把生成或编辑后的本地图片发布为持久聊天附件，供用户查看 | 图片附件 |
 | `vision_pixel_diff` | 逐像素对比：差异率 + 最差 8×8 网格区域 | 红色热力图 PNG + JSON 报告 |
 | `vision_colors` | 主色提取（十六进制 + 占比） | — |
-| `vision_ocr` | 文字转写：本地 tesseract（中英）优先，视觉模型兜底 | — |
+| `vision_ocr` | 文字转写：默认引擎可配置为 `auto` / 本地 Tesseract / 视觉模型；单次显式 engine 仍优先 | — |
 | `vision_trace` | SVG 矢量化（potrace 分色；图标/logo） | SVG |
 | `vision_extract_foreground` | 边界洪泛抠图（纯色背景） | 透明 PNG |
 | `vision_html_screenshot` | 给本地 HTML 文件截图（无头系统 Chrome）；`fullPage: true` 截整页并返回 `pageHeight` | PNG |
@@ -354,9 +373,10 @@ Web profile 现在提供一级 **设置 → Vision Router** 页面。常规页�
 | `tool` / `progressiveTools` / `autoActivateOnImage` | `true` / `false` / `true` | 视觉工具总开关 / 渐进式挂载（默认关闭以稳定工具 schema）/ 渐进模式下图片轮自动挂载；`progressiveTools` 为启动期配置 |
 | `rewriteImages` | `true` | 模型输入层改写图片块（缓存描述或工具提示标记）；界面日志保留图片 |
 | `desktopScreenshot` | `false` | 模型可调用的 `vision_screenshot` 桌面截屏隐私开关；每次截屏前实时检查 |
-| `freeFallback` | `true` | 在显式本地/自定义 HTTP 后端之后追加匿名 OVH 模型；关闭它不会停用用户明确配置的本地后端 |
-| `localOllama` | `{ enabled: false, baseURL: 'http://127.0.0.1:11434/v1', model: 'qwen2.5vl', format: 'openai' }` | 本地视觉后端；开启后排在 HTTP 视觉链前部，服务未运行会自动跳过，支持 OpenAI / Anthropic 协议 |
-| `localLmStudio` | `{ enabled: false, baseURL: 'http://localhost:1234/v1', model: '', format: 'openai' }` | Ollama 之后的本地 LM Studio 后端；填写 Developer 页或 `/v1/models` 返回的真实模型 ID |
+| `localOnlyVision` | `false` | 运行时隐私策略：开启后只有回环地址上的视觉端点可执行；云端/DSH Provider 与内置 OVH 兜底保留配置但 fail closed |
+| `freeFallback` | `true` | 在显式本地/自定义 HTTP 后端之后追加匿名 OVH 模型；`localOnlyVision` 开启期间不会执行 |
+| `localOllama` | `{ enabled: false, baseURL: 'http://127.0.0.1:11434/v1', model: 'qwen2.5vl', format: 'openai', maxTokens: 4096, reasoningEffort: 'none' }` | 本地视觉后端；OpenAI 模式默认关闭受支持模型的推理，把输出预算留给正文 |
+| `localLmStudio` | `{ enabled: false, baseURL: 'http://localhost:1234/v1', model: '', format: 'openai', maxTokens: 4096, reasoningEffort: 'none' }` | Ollama 之后的本地 LM Studio 后端；LM Studio 0.4+ 可选 `format: 'lmstudio'` 使用官方原生推理控制 |
 | `visionTurnBudgetMs` | `0` | 整轮视觉总墙钟预算；`0` = 不设整轮上限。具体 provider调用/工具仍有自己的硬超时 |
 | `downscale` / `downscaleMaxPixels` | `true` / `4000000` | 调用前压缩及其像素预算（延迟保护） |
 | `cache` / `cacheTtlSeconds` / `cacheMaxEntries` | `true` / `3600` / `200` | 视觉答案缓存 |
@@ -404,22 +424,22 @@ ollama pull qwen2.5vl
 
 **3. 行为说明**
 
-- 开启后 `local-ollama` 排在 HTTP 视觉链前部。若要严格纯本地，请移除云视觉行/自定义 HTTP 端点，并关闭 `freeFallback`。
+- 开启后 `local-ollama` 排在 HTTP 视觉链前部。若要在不删除已保存云端配置的情况下硬阻止远程视觉出网，请开启 **常规 → 仅本地视觉**；策略开启期间只有回环地址上的视觉端点可执行。
 - 选中的本机 loopback Ollama 模型会通过原生 API 预热并保持 30 分钟驻留。如果模型在 Ollama 作为首个图片后端时已经冷却，加载会在正常视觉任务预算开始之前完成；短 `/api/ps` 探测保证服务未运行/挂死时仍快速进入 fallback。远程 Ollama URL 不会自动预热。
 - **LM Studio 同理**——开启 `localLmStudio`，填 OpenAI 兼容端点（默认 `http://localhost:1234/v1`），并使用 Developer 页或 `/v1/models` 返回的真实模型标识。它排在 `local-ollama` 之后、自定义/云 HTTP 后端之前。
-- 每个本地后端可通过 `format` 选择 **OpenAI 或 Anthropic 格式**（默认 `openai`）。Anthropic 模式走 `/v1/messages`，带 `anthropic-version` 并把图片转为 base64 source；只有配置了 Key 才发送 `x-api-key`。LM Studio 需 0.4.1 或更高版本才提供该端点。
-- 任一本地后端未运行或调用超时时自动跳过，继续降级到云链。
+- 本地后端继续以 **OpenAI** 为兼容默认，也可选 **Anthropic**。LM Studio 额外提供 **LM Studio 原生**模式（`format: 'lmstudio'`，需 LM Studio 0.4+），走 `/api/v1/chat`；需要稳定关闭推理时推荐该模式，因为官方 API 明确支持 `reasoning: off`。`maxTokens` 可配置，默认 4096。
+- 任一本地后端未运行或调用超时时自动跳过。正常模式下可继续降级到云链；开启 **仅本地视觉** 后，所有远程兜底继续保持阻断，视觉调用会 fail closed。
 - `vision_screenshot` 默认关闭。单独开启「桌面截屏」隐私开关后，`identify=true` 使用同样的 Ollama → LM Studio 降级顺序。
 
 ## 环境要求
 
 - DeepSeek Harness 的 Web profile。普通安装可用 `npx @deepseek-ai/dsh ...`；从源码仓库运行时用 `pnpm dsh ...`。只有 CLI 已经进入系统 `PATH` 时才能直接写 `dsh ...`。
-- **DSH Host 支持策略：** DVR 2.1.x 的公开最低 Host 仍为 DSH `0.1.0-rc.8`，当前正式发布通道已验证并支持到 `0.1.5-rc.2`。对 `0.1.6-alpha.1` 的精确覆盖**只属于验证证据**，不代表对 preview 的公开支持承诺；定时 `latest`/`alpha` canary 只负责发现上游漂移，也不会自动改变支持策略。DVR 2.0.x 是最后公开支持 rc.6/rc.7 的版本线。详见 [DSH Host 支持窗口](docs/architecture/dsh-support-window.md)。
+- **DSH Host 支持策略：** DVR 2.2.x 的公开最低 Host 仍为 DSH `0.1.0-rc.8`，当前正式发布通道已验证并支持到 `0.1.5-rc.3`。DSH `0.2.x` 版本线已在完成精确预发布 master、真实 Host、Windows Desktop、多插件隔离及打包后 ASAR 验证后提前准入（`^0.2.0`）；上游正式发布不可变 `0.2.0` tag 和签名 Desktop 安装包后仍会立即复验。对 `0.1.7-rc.2`（`next`）的精确覆盖继续作为验证证据。DVR 2.0.x 是最后公开支持 rc.6/rc.7 的版本线。详见 [DSH Host 支持窗口](docs/architecture/dsh-support-window.md)。
 - Node ≥ 22（宿主侧）。
 - 默认免费链路无需 API Key；付费 `httpProviders` 只需一个凭据引用（`apiKeyEnv`）。
 - 只有 `vision_html_screenshot` 需要 Chrome / Chromium / Edge；其余工具无浏览器也能用。
 - 桌面截屏必须显式开启。Windows/macOS 使用系统截屏能力；Linux 需安装 ImageMagick `import` 或 `scrot`，且必须处于可截取的桌面会话（Wayland 支持取决于环境）。
-- tesseract 可选：本地引擎缺失时 `vision_ocr` 自动退回视觉模型。
+- tesseract 可选。`vision_ocr` 默认使用 `ocrEngine: auto`（本地 Tesseract 优先、失败或空结果再回退视觉模型）；也可在「设置 → 高级 → OCR 默认引擎」强制仅 Tesseract 或直接使用视觉模型，无需卸载 Tesseract。单次调用显式 `engine=tesseract|vision` 始终覆盖默认设置。
 
 ## 安装与生命周期
 
