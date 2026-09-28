@@ -1,0 +1,27 @@
+{
+  "id": "dsh-vision-router",
+  "displayName": "Vision Router",
+  "summary": "为纯文本 DeepSeek Harness 智能体提供视觉能力：内置免密钥免费视觉链路与像素级视觉工具（问答、定位、裁剪、像素对比、取色、OCR、SVG 描摹、抠图、截图），一条命令安装，无需 Python。",
+  "categories": [
+    "vision",
+    "multimodal"
+  ],
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "vision",
+    "vision-tools",
+    "multimodal",
+    "image",
+    "ocr",
+    "screenshot"
+  ],
+  "publisher": {
+    "name": "yuanqixun (袁启勋) <yuanqixun@gmail.com>"
+  },
+  "compatibility": {
+    "hosts": [
+      "gui>=2.0"
+    ]
+  }
+}
