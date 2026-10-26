@@ -23,6 +23,7 @@ const admitted = [
   // DSH deliberately evaluates peer ranges with includePrerelease=true.
   // Declaring the whole 0.2.x family therefore also admits its prereleases.
   '0.2.1-rc.1',
+  '0.2.1-rc.3',
 ]
 for (const runtimeVersion of admitted) {
   assert.equal(
@@ -36,7 +37,7 @@ for (const runtimeVersion of ['0.3.0-rc.1', '0.3.0', '1.0.0']) {
   const issue = evaluatePluginCompatibility(manifest, {}, runtimeVersion)
   assert.ok(issue, `DVR manifest must not pre-admit DSH ${runtimeVersion}`)
   assert.deepEqual(
-    Object.keys(issue.peers).sort(),
+    Object.keys(issue.requirements).sort(),
     ['@deepseek-ai/dsh-anonymous-user-id', '@deepseek-ai/dsh-llm-deepseek'],
     `DSH ${runtimeVersion} refusal must be caused only by DVR's declared DSH peers`,
   )

@@ -82,7 +82,7 @@ const DEFAULT_TEST_EXCLUSIONS = Object.freeze([
   { path: 'tests/p3-web-modularization.test.js', owner: '.github/workflows/p3-compat-convergence.yml', reason: 'compatibility convergence Node 22/24 matrix' },
 ])
 
-test('host-provided DSH packages publish the active Host floor while retaining an installable legacy dev fixture', async () => {
+test('host-provided DSH packages publish the active Host floor and pin current core development versions', async () => {
   const pkg = await manifest()
   const hostPeers = [
     '@deepseek-ai/dsh-anonymous-user-id',
@@ -97,8 +97,9 @@ test('host-provided DSH packages publish the active Host floor while retaining a
     assert.match(peer, /\^0\.1\.1-rc\.1/, `${name} must admit the released DSH 0.1.1 train`)
     assert.match(peer, /\^0\.1\.3-alpha\.2/, `${name} must admit the verified DSH 0.1.3 alpha train`)
     assert.match(peer, /\^0\.2\.0/, `${name} must admit the declared DSH 0.2.x train`)
+    assert.match(peer, /\^0\.2\.1-rc\.3/, `${name} must admit DSH 0.2.1-rc.3 npm installs`)
     assert.equal(typeof pkg.devDependencies?.[name], 'string', `${name} must remain available for tests`)
-    assert.match(pkg.devDependencies[name], /\^0\.1\.0-rc\.6/)
+    assert.equal(pkg.devDependencies[name], '0.2.1-rc.3')
   }
 })
 

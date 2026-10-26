@@ -5,6 +5,11 @@ Bilingual (Chinese + English) release notes for every version — the GitHub Rel
 
 ## Unreleased
 
+## v2.2.7
+
+- **DSH 0.2.1-rc.3 install compatibility:** adds an explicit peer range for npm installers and aligns development dependencies with DSH `0.2.1-rc.3`; the existing minimum Host floor and stable `0.2.x` admission remain unchanged.
+- **DSH 0.2.1-rc.3 安装兼容性：**为 npm 安装器增加显式 peer 范围，并将开发依赖对齐到 DSH `0.2.1-rc.3`；原最低 Host 版本和稳定版 `0.2.x` 准入范围保持不变。
+
 ## v2.2.1
 
 ### Stability & compatibility hotfixes / 稳定性与兼容性热修
